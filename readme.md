@@ -2,40 +2,127 @@
 
 This application connects to Google BigQuery to update column descriptions based on metadata stored in a separate BigQuery table. It reads configuration parameters from a `.env` file to ensure sensitive information and configuration are easily managed.
 
+## Features
+
+- Updates BigQuery column descriptions from a metadata table
+- Handles rate limiting with configurable delays
+- Supports local logging for debugging
+- Graceful error handling and keyboard interrupts
+- Detailed job run logging in BigQuery
+- Case-insensitive column name matching
+
 ## Setup Instructions
-Follow these steps to set up and run the application:
 
-### 1. Create and Configure `.env` File
+### 1. Set Up Virtual Environment
 
-Create a file named `.env` in the `app-cli/` directory. This file will store your BigQuery project ID, metadata table names, and other configuration. Add the following content to it, replacing the placeholder values with your actual project and table details:
-
-```
-PROJECT_ID=your=project-id
-METADATA_TABLE=datasetname.tablename
-JOB_RUN_TABLE=datasetname.job_runs
-SLEEP_SECONDS=2
-```
-
--   `PROJECT_ID`: Your Google Cloud Project ID where your BigQuery datasets are located.
--   `METADATA_TABLE`: The full path to your metadata table (e.g., `your_dataset.your_metadata_table`) please create a dataset for governance metadata, e.g.: governance_metadata.
--   `JOB_RUN_TABLE`: The full path to the table where job run logs will be stored (under the dataset you created).
--   `SLEEP_SECONDS`: The delay in seconds between BigQuery ALTER commands to avoid rate limits.
-
-### 2. Install Dependencies
-
-Navigate to the `app-cli/` directory in your terminal and install the required Python packages using `pip`:
+It's recommended to use a virtual environment to isolate the project dependencies:
 
 ```bash
-pip install -r app-cli/requirements.txt
+# Create a virtual environment
+python -m venv venv
+
+# Activate the virtual environment
+# On Windows:
+venv\Scripts\activate
+# On macOS/Linux:
+source venv/bin/activate
+
+# Your prompt should now show (venv) at the beginning
 ```
-Please make sure you have authorized against your BigQuery account.
 
-### 3. Run the Application
+To deactivate the virtual environment when you're done:
+```bash
+deactivate
+```
 
-Once the `.env` file is configured and dependencies are installed, you can run the application from the `app-cli/` directory:
+### 2. Create and Configure `.env` File
 
+Create a file named `.env` in the `app-cli/` directory with the following content:
+
+```
+PROJECT_ID=your-project-id
+METADATA_TABLE=governance_metadata.system_metadata
+JOB_RUN_TABLE=governance_metadata.job_runs
+SLEEP_MSECONDS=1000
+```
+
+- `PROJECT_ID`: Your Google Cloud Project ID where your BigQuery datasets are located
+- `METADATA_TABLE`: The full path to your metadata table (e.g., `governance_metadata.system_metadata`)
+- `JOB_RUN_TABLE`: The full path to the table where job run logs will be stored
+- `SLEEP_MSECONDS`: Optional delay in milliseconds between DDL statements (default: 1000ms)
+
+### 3. Install Dependencies
+
+With your virtual environment activated, navigate to the `app-cli/` directory and install the required Python packages:
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Run the Application
+
+Basic usage:
 ```bash
 python main.py
 ```
 
-The application will connect to BigQuery, fetch metadata, update column descriptions, and log the job run results.
+With local logging enabled:
+```bash
+python main.py --log
+```
+
+The `--log` option creates a local log file with timestamps for detailed debugging.
+
+## Metadata Table Structure
+
+The metadata table should have the following columns:
+- `target_dataset_name`: The dataset name (without project ID)
+- `table_name`: The table name
+- `column_name`: The column name
+- `column_metadata`: The description to set
+
+## Output
+
+The application provides real-time feedback about:
+- Successfully updated columns
+- Skipped columns (no change needed)
+- Unmatched columns (not found in target tables)
+- Errors encountered
+
+A summary is displayed at the end of the run, and all actions are logged to the specified BigQuery job run table.
+
+## Error Handling
+
+- Graceful handling of keyboard interrupts (Ctrl+C)
+- Detailed error messages for common issues
+- Automatic retry with backoff for rate limits
+- Comprehensive logging of all operations
+
+## Requirements
+
+- Python 3.6+
+- Google Cloud credentials configured
+- BigQuery API enabled
+- Required Python packages (see requirements.txt)
+
+## Development
+
+When working on the project:
+
+1. Always activate the virtual environment first:
+```bash
+source venv/bin/activate  # On macOS/Linux
+# or
+venv\Scripts\activate     # On Windows
+```
+
+2. Install new dependencies with:
+```bash
+pip install package_name
+pip freeze > requirements.txt  # Update requirements.txt
+```
+
+3. Deactivate when done:
+```bash
+deactivate
+```
