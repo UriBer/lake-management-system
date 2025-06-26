@@ -64,7 +64,7 @@ deactivate
 
 ### 2. Create and Configure `.env` File
 
-Create a file named `.env` in the `app-cli/` directory with the following content:
+Create a file named `.env` in the `app-cli/update-column-metadata` directory with the following content:
 
 ```
 PROJECT_ID=your-project-id
@@ -80,12 +80,12 @@ SLEEP_MSECONDS=1000
 
 ### 3. Create BigQuery Tables
 
-The `app-cli/sample` directory contains scripts to set up the required tables:
+The `app-cli/update-column-metadata/sample` directory contains scripts to set up the required tables:
 
 1. Make sure your `.env` file is properly configured
 2. Navigate to the sample directory:
 ```bash
-cd app-cli/sample
+cd app-cli/update-column-metadata/sample
 ```
 3. Make the setup script executable:
 ```bash
@@ -136,7 +136,7 @@ The metadata table should have the following columns:
 - `column_name`: The column name
 - `column_metadata`: The description to set
 
-A sample metadata file (`app-cli/sample/sample_metadata.csv`) is provided with generic example data. Example row:
+A sample metadata file (`app-cli/update-column-metadata/sample/sample_metadata.csv`) is provided with generic example data. Example row:
 ```csv
 target_dataset_name,table_name,column_name,column_metadata
 raw_data,customers,customer_id,"Unique identifier for each customer"
@@ -187,3 +187,6 @@ pip freeze > requirements.txt  # Update requirements.txt
 ```bash
 deactivate
 ```
+4. Run using
+
+python ./app-cli/update-column-metadata/main.py -log

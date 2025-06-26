@@ -31,6 +31,7 @@ parser.add_argument("--log", action="store_true",
 args = parser.parse_args()
 
 PROJECT_ID     = os.getenv("PROJECT_ID")
+print(f"Project id :{PROJECT_ID}")
 METADATA_TABLE = os.getenv("METADATA_TABLE")
 JOB_RUN_TABLE  = os.getenv("JOB_RUN_TABLE")
 SLEEP_MS       = int(os.getenv("SLEEP_MSECONDS", "1000"))
@@ -66,6 +67,7 @@ def update_column_descriptions() -> None:
         write(f"📝  Local log enabled → {log_path}")
 
     write(f"🚀  Starting column-description sync (run-id {run_id})")
+    write(f"⏹️ Project id : {PROJECT_ID}")
     write(f"📑  Metadata table  : {METADATA_TABLE}")
     write(f"📑  Job-run table   : {JOB_RUN_TABLE}")
     write(f"⏱️   Sleep between DDL: {SLEEP_MS} ms\n")
