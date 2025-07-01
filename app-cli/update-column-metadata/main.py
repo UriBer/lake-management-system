@@ -47,9 +47,9 @@ def update_column_descriptions():
         log_path = f"column_updates_{run_id}.log"
         write(f"📝 Logging to {log_path}")
 
-    write(f"🚀 Starting run {run_id}")
-    write(f"📄 Metadata: {METADATA_TABLE}")
-    write(f"📄 Log     : {JOB_RUN_TABLE}")
+    write(f"🚀 Starting run : {run_id}")
+    write(f"📄 Metadata     : {METADATA_TABLE}")
+    write(f"📄 Log          : {JOB_RUN_TABLE}")
 
     sql = f"""
         SELECT target_dataset_name AS dataset_name,
