@@ -195,3 +195,5 @@ cython_debug/
 
 # macos 
 .DS_Store
+# exported tables 
+table_comparison*.txt

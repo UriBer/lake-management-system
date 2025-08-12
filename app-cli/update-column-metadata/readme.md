@@ -70,7 +70,8 @@ Create a file named `.env` in the `app-cli/update-column-metadata` directory wit
 PROJECT_ID=your-project-id
 METADATA_TABLE=governance_metadata.system_metadata
 JOB_RUN_TABLE=governance_metadata.job_runs
-SLEEP_MSECONDS=1000
+SLEEP_MSECONDS=500
+MAX_PARALLEL_WORKERS=10
 ```
 
 - `PROJECT_ID`: Your Google Cloud Project ID where your BigQuery datasets are located
