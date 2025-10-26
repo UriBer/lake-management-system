@@ -24,8 +24,8 @@ args = parser.parse_args()
 PROJECT_ID     = os.getenv("PROJECT_ID")
 METADATA_TABLE = os.getenv("METADATA_TABLE")
 JOB_RUN_TABLE  = os.getenv("JOB_RUN_TABLE")
-SLEEP_MS       = int(os.getenv("SLEEP_MSECONDS", "1000"))
-MAX_WORKERS    = int(os.getenv("MAX_PARALLEL_WORKERS", "5"))
+SLEEP_MS       = int(os.getenv("SLEEP_MSECONDS", "500"))
+MAX_WORKERS    = int(os.getenv("MAX_PARALLEL_WORKERS", "10"))
 
 if not all([PROJECT_ID, METADATA_TABLE, JOB_RUN_TABLE]):
     sys.exit("❌ PROJECT_ID / METADATA_TABLE / JOB_RUN_TABLE must be set")
