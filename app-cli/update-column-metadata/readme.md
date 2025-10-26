@@ -190,4 +190,4 @@ deactivate
 ```
 4. Run using
 
-python ./app-cli/update-column-metadata/main.py -log
+python ./app-cli/update-column-metadata/main.py --log
