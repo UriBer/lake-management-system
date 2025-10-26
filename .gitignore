@@ -197,4 +197,4 @@ cython_debug/
 .DS_Store
 # exported tables 
 table_comparison*.txt
-app-cli/get-table-list-to-csv/*.csv
+*.csv
