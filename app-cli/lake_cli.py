@@ -33,12 +33,14 @@ Available commands:
   schema-compare  Compare schemas between two BigQuery tables
   table-compare   Compare data between two BigQuery tables
   update-metadata Update column descriptions from metadata table
+  dataset-hierarchy Analyze complete dataset hierarchy with change tracking
 
 Examples:
   lake-cli table-list --dataset my_dataset
   lake-cli schema-compare table1 table2
   lake-cli table-compare table1 table2
   lake-cli update-metadata --log
+  lake-cli dataset-hierarchy --project my-project-id
 
 For help on specific commands:
   lake-cli <command> --help
@@ -164,6 +166,37 @@ def setup_update_metadata_parser(subparsers):
     
     return parser
 
+def setup_dataset_hierarchy_parser(subparsers):
+    """Setup parser for dataset-hierarchy command."""
+    parser = subparsers.add_parser(
+        "dataset-hierarchy",
+        help="Analyze complete dataset hierarchy with change tracking",
+        description="Analyze all datasets in a BigQuery project, providing complete hierarchy, table counts, row counts, and change detection between runs."
+    )
+    
+    parser.add_argument(
+        "--project", "-p",
+        help="BigQuery project ID (overrides PROJECT_ID from .env)"
+    )
+    
+    parser.add_argument(
+        "--include-views",
+        action="store_true",
+        help="Include views in the analysis (default: tables only)"
+    )
+    
+    parser.add_argument(
+        "--compare", "-c",
+        help="Path to previous analysis JSON file for comparison"
+    )
+    
+    parser.add_argument(
+        "--output", "-o",
+        help="Output file path (default: auto-generated with timestamp)"
+    )
+    
+    return parser
+
 def main():
     """Main entry point for the unified CLI."""
     parser, subparsers = setup_main_parser()
@@ -173,6 +206,7 @@ def main():
     setup_schema_compare_parser(subparsers)
     setup_table_compare_parser(subparsers)
     setup_update_metadata_parser(subparsers)
+    setup_dataset_hierarchy_parser(subparsers)
     
     # Parse arguments
     args = parser.parse_args()
@@ -199,6 +233,10 @@ def main():
         elif args.command == "update-metadata":
             from modules.update_metadata import main as update_metadata_main
             return update_metadata_main(args)
+        
+        elif args.command == "dataset-hierarchy":
+            from modules.dataset_hierarchy import main as dataset_hierarchy_main
+            return dataset_hierarchy_main(args)
         
         else:
             print(f"❌ Unknown command: {args.command}")

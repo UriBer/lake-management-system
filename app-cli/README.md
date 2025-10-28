@@ -159,6 +159,31 @@ Update column descriptions from metadata table.
 - Parallel processing for performance
 - Change detection (only updates when descriptions differ)
 
+### 5. Dataset Hierarchy (`dataset-hierarchy`)
+Analyze complete dataset hierarchy with change tracking.
+
+```bash
+# Basic analysis
+./lc dataset-hierarchy --project my-project-id
+
+# Include views in analysis
+./lc dataset-hierarchy --project my-project-id --include-views
+
+# Compare with previous analysis
+./lc dataset-hierarchy --project my-project-id --compare previous_analysis.json
+
+# Custom output file
+./lc dataset-hierarchy --project my-project-id --output my_analysis.json
+```
+
+**Features:**
+- Complete dataset hierarchy analysis
+- Table and view counts per dataset
+- Row counts from metadata (no query execution)
+- Change detection between runs
+- Comprehensive JSON output for comparison
+- Detailed change summary with additions, removals, and modifications
+
 **Examples:**
 ```bash
 # Update metadata with logging
@@ -211,7 +236,8 @@ app-cli/
 │   ├── table_list.py             # Table extraction module
 │   ├── schema_compare.py         # Schema comparison module
 │   ├── table_compare.py          # Table comparison module
-│   └── update_metadata.py        # Metadata update module
+│   ├── update_metadata.py        # Metadata update module
+│   └── dataset_hierarchy.py      # Dataset hierarchy analysis module
 ├── requirements.txt              # Unified dependencies
 ├── .env.example                  # Environment template
 ├── install.sh                    # Installation script

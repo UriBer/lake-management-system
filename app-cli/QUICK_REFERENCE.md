@@ -30,6 +30,11 @@ gcloud auth application-default login
 ./lc update-metadata [--log]
 ```
 
+### Dataset Hierarchy
+```bash
+./lc dataset-hierarchy --project <project> [--include-views] [--compare <file>] [--output <file>]
+```
+
 ## 🔧 Configuration (.env)
 ```bash
 PROJECT_ID=your-project-id
@@ -52,6 +57,9 @@ MAX_PARALLEL_WORKERS=10
 
 # Update column descriptions
 ./lc update-metadata --log
+
+# Analyze dataset hierarchy
+./lc dataset-hierarchy --project my-project-id --include-views
 ```
 
 ## 🆘 Help

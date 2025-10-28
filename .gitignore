@@ -198,3 +198,4 @@ cython_debug/
 # exported tables 
 table_comparison*.txt
 *.csv
+app-cli/test*.json
