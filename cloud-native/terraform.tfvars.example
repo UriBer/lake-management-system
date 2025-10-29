@@ -1,0 +1,38 @@
+# Terraform Variables for Lake Management System - Cloud Native Deployment
+# Copy this file to terraform.tfvars and customize
+
+project_id = "your-project-id"
+region     = "us-central1"
+image_url  = "gcr.io/your-project-id/lake-management-api"
+
+# Dataset Hierarchy Configuration
+batch_mgmt_table  = "governance_metadata.batch_management"
+hierarchy_bq_table = "governance_metadata.hierarchy_analysis"
+
+# BigQuery Alerts Configuration
+alerts_table = "governance_metadata.size_alerts"
+
+# Metadata Update Configuration
+metadata_table = "governance_metadata.system_metadata"
+job_run_table  = "governance_metadata.job_runs"
+sleep_ms       = 500
+max_workers     = 10
+
+# Schedule Configuration (Cron format: "minute hour day month weekday")
+# All times in UTC by default
+dataset_hierarchy_schedule = "0 2 * * *"  # Daily at 2:00 AM UTC
+bq_alerts_schedule        = "0 3 * * *"   # Daily at 3:00 AM UTC (after hierarchy)
+update_metadata_schedule  = "0 3 * * *"   # Daily at 3:00 AM UTC
+timezone                  = "UTC"
+
+# Pause jobs if needed (set to true to disable)
+dataset_hierarchy_paused = false
+bq_alerts_paused        = false
+update_metadata_paused  = false
+
+# Optional: Default environment variables for Cloud Run
+default_env_vars = {
+  # "MAX_PARALLEL_WORKERS" = "20"
+  # "BATCH_MGMT_TABLE"      = "governance_metadata.batch_management"
+}
+
