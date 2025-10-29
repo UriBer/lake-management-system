@@ -38,7 +38,7 @@ gcloud auth application-default login
 ## 🔧 Configuration (.env)
 ```bash
 PROJECT_ID=your-project-id
-METADATA_TABLE=governance_metadata.msi_metadata
+METADATA_TABLE=governance_metadata.project_metadata
 JOB_RUN_TABLE=governance_metadata.job_runs
 SLEEP_MSECONDS=500
 MAX_PARALLEL_WORKERS=10

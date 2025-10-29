@@ -189,6 +189,7 @@ Analyze complete dataset hierarchy with change tracking. Supports JSON output an
 - Change detection between runs
 - Comprehensive JSON output for comparison
 - Detailed change summary with additions, removals, and modifications
+- **Parallel processing** with configurable workers for faster analysis
 - **BigQuery table persistence** with LDTS and batch_id tracking
 - **Automatic comparison** with previous runs from BigQuery
 - **Batch Management Table** with automatic batch_id generation (DDMMYYYY-NNNN format)
@@ -250,7 +251,7 @@ JOB_RUN_TABLE=governance_metadata.job_runs     # Job logging table path
 
 # Optional
 SLEEP_MSECONDS=500                            # Rate limiting delay
-MAX_PARALLEL_WORKERS=10                       # Parallel processing limit
+MAX_PARALLEL_WORKERS=10                       # Parallel processing limit (for dataset-hierarchy and update-metadata)
 BATCH_MGMT_TABLE=governance_metadata.batch_management  # Batch management table (for dataset-hierarchy)
 ```
 
@@ -327,6 +328,23 @@ fi
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 ./lc table-list --dataset my_dataset --output tables_${TIMESTAMP}.csv
 ```
+
+### Performance Optimization
+
+**Parallel Processing for Dataset Hierarchy:**
+The `dataset-hierarchy` command uses parallel processing to analyze multiple datasets and tables simultaneously. Configure the number of workers:
+
+```bash
+# In .env file
+MAX_PARALLEL_WORKERS=20  # Increase for faster analysis (default: 10)
+
+# Recommended values:
+# - Small projects (< 10 datasets): 5-10 workers
+# - Medium projects (10-50 datasets): 10-20 workers
+# - Large projects (50+ datasets): 20-50 workers
+```
+
+**Note:** Higher worker counts improve speed but increase BigQuery API usage. Monitor your quota limits.
 
 ## 🧪 Testing
 

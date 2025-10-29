@@ -16,9 +16,11 @@ import sys
 import json
 import uuid
 import argparse
+import threading
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound, BadRequest
@@ -39,19 +41,175 @@ def get_project_id(project_arg: Optional[str] = None) -> str:
     
     return project_id
 
-def analyze_dataset_hierarchy(client: bigquery.Client, project_id: str, include_views: bool = False) -> Dict[str, Any]:
+def analyze_table(client: bigquery.Client, project_id: str, dataset_id: str, table_item: Any, 
+                  include_views: bool) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     """
-    Analyze complete dataset hierarchy for a project.
+    Analyze a single table.
+    
+    Args:
+        client: BigQuery client
+        project_id: Project ID
+        dataset_id: Dataset ID
+        table_item: Table list item from BigQuery
+        include_views: Whether to include views
+    
+    Returns:
+        Tuple of (table_id, table_info_dict) or (None, None) if skipped
+    """
+    table_id = table_item.table_id
+    table_type = table_item.table_type
+    
+    # Skip views if not requested
+    if table_type == "VIEW" and not include_views:
+        return None, None
+    
+    table_info = {
+        "table_id": table_id,
+        "table_type": table_type,
+        "created": getattr(table_item, 'created', None),
+        "modified": getattr(table_item, 'modified', None),
+        "row_count": 0,
+        "size_bytes": 0,
+        "num_bytes": 0,
+        "num_long_term_bytes": 0
+    }
+    
+    # Convert datetime objects to ISO format if they exist
+    if table_info["created"]:
+        table_info["created"] = table_info["created"].isoformat()
+    if table_info["modified"]:
+        table_info["modified"] = table_info["modified"].isoformat()
+    
+    try:
+        # Get detailed table information
+        table_ref = f"{project_id}.{dataset_id}.{table_id}"
+        table_obj = client.get_table(table_ref)
+        
+        # Get row count from metadata
+        table_info["row_count"] = getattr(table_obj, 'num_rows', 0) if getattr(table_obj, 'num_rows', None) else 0
+        table_info["size_bytes"] = getattr(table_obj, 'num_bytes', 0) if getattr(table_obj, 'num_bytes', None) else 0
+        table_info["num_bytes"] = getattr(table_obj, 'num_bytes', 0) if getattr(table_obj, 'num_bytes', None) else 0
+        table_info["num_long_term_bytes"] = getattr(table_obj, 'num_long_term_bytes', 0) if getattr(table_obj, 'num_long_term_bytes', None) else 0
+        
+    except Exception as e:
+        print(f"      ⚠️  Error analyzing {table_type} {table_id}: {e}")
+        table_info["error"] = str(e)
+    
+    return table_id, table_info
+
+def analyze_dataset(client: bigquery.Client, project_id: str, dataset_item: Any, 
+                    include_views: bool, max_workers: int, 
+                    summary_lock: threading.Lock, global_summary: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    """
+    Analyze a single dataset and all its tables (in parallel).
+    
+    Args:
+        client: BigQuery client
+        project_id: Project ID
+        dataset_item: Dataset list item from BigQuery
+        include_views: Whether to include views
+        max_workers: Maximum parallel workers for table processing
+        summary_lock: Thread lock for summary updates
+        global_summary: Global summary dictionary to update
+    
+    Returns:
+        Tuple of (dataset_id, dataset_info_dict)
+    """
+    dataset_id = dataset_item.dataset_id
+    print(f"  📁 Analyzing dataset: {dataset_id}")
+    
+    dataset_info = {
+        "dataset_id": dataset_id,
+        "location": getattr(dataset_item, 'location', 'Unknown'),
+        "created": getattr(dataset_item, 'created', None),
+        "modified": getattr(dataset_item, 'modified', None),
+        "tables": {},
+        "summary": {
+            "total_tables": 0,
+            "total_views": 0,
+            "total_rows": 0
+        }
+    }
+    
+    # Convert datetime objects to ISO format if they exist
+    if dataset_info["created"]:
+        dataset_info["created"] = dataset_info["created"].isoformat()
+    if dataset_info["modified"]:
+        dataset_info["modified"] = dataset_info["modified"].isoformat()
+    
+    try:
+        # Get all tables/views in dataset
+        tables = list(client.list_tables(dataset_id))
+        
+        # Process tables in parallel
+        tables_to_process = [t for t in tables if include_views or t.table_type != "VIEW"]
+        
+        if tables_to_process:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all table analysis tasks
+                future_to_table = {
+                    executor.submit(analyze_table, client, project_id, dataset_id, table, include_views): table
+                    for table in tables_to_process
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_table):
+                    try:
+                        table_id, table_info = future.result()
+                        if table_id and table_info:
+                            dataset_info["tables"][table_id] = table_info
+                            table_type = table_info["table_type"]
+                            row_count = table_info["row_count"]
+                            
+                            # Update dataset summary
+                            if table_type == "TABLE":
+                                dataset_info["summary"]["total_tables"] += 1
+                            elif table_type == "VIEW":
+                                dataset_info["summary"]["total_views"] += 1
+                            
+                            dataset_info["summary"]["total_rows"] += row_count
+                            
+                            # Update global summary with lock
+                            with summary_lock:
+                                if table_type == "TABLE":
+                                    global_summary["total_tables"] += 1
+                                elif table_type == "VIEW":
+                                    global_summary["total_views"] += 1
+                                global_summary["total_rows"] += row_count
+                            
+                            print(f"      ✅ {table_type}: {table_id} - {row_count:,} rows")
+                    except Exception as e:
+                        table_item = future_to_table[future]
+                        print(f"      ⚠️  Error processing table {table_item.table_id}: {e}")
+        
+        print(f"  ✅ Dataset {dataset_id}: {dataset_info['summary']['total_tables']} tables, {dataset_info['summary']['total_views']} views, {dataset_info['summary']['total_rows']:,} rows")
+        
+    except Exception as e:
+        print(f"  ❌ Error analyzing dataset {dataset_id}: {e}")
+        dataset_info["error"] = str(e)
+    
+    return dataset_id, dataset_info
+
+def analyze_dataset_hierarchy(client: bigquery.Client, project_id: str, include_views: bool = False, max_workers: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Analyze complete dataset hierarchy for a project with parallel processing.
     
     Args:
         client: BigQuery client
         project_id: Project ID to analyze
         include_views: Whether to include views in analysis
+        max_workers: Maximum parallel workers (defaults to MAX_PARALLEL_WORKERS from env or 10)
     
     Returns:
         Dictionary containing complete hierarchy analysis
     """
     print(f"🔍 Analyzing dataset hierarchy for project: {project_id}")
+    
+    # Get max workers from environment or use default
+    if max_workers is None:
+        max_workers = int(os.getenv("MAX_PARALLEL_WORKERS", "10"))
+    
+    print(f"🚀 Using {max_workers} parallel workers")
     
     hierarchy = {
         "project_id": project_id,
@@ -65,6 +223,10 @@ def analyze_dataset_hierarchy(client: bigquery.Client, project_id: str, include_
         }
     }
     
+    # Thread lock for updating global summary
+    summary_lock = threading.Lock()
+    global_summary = hierarchy["summary"]
+    
     try:
         # Get all datasets
         datasets = list(client.list_datasets())
@@ -72,97 +234,23 @@ def analyze_dataset_hierarchy(client: bigquery.Client, project_id: str, include_
         
         print(f"📊 Found {len(datasets)} datasets")
         
-        for dataset in datasets:
-            dataset_id = dataset.dataset_id
-            print(f"  📁 Analyzing dataset: {dataset_id}")
-            
-            dataset_info = {
-                "dataset_id": dataset_id,
-                "location": getattr(dataset, 'location', 'Unknown'),
-                "created": getattr(dataset, 'created', None),
-                "modified": getattr(dataset, 'modified', None),
-                "tables": {},
-                "summary": {
-                    "total_tables": 0,
-                    "total_views": 0,
-                    "total_rows": 0
-                }
+        # Process datasets in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all dataset analysis tasks
+            future_to_dataset = {
+                executor.submit(analyze_dataset, client, project_id, dataset, include_views, max_workers, summary_lock, global_summary): dataset
+                for dataset in datasets
             }
             
-            # Convert datetime objects to ISO format if they exist
-            if dataset_info["created"]:
-                dataset_info["created"] = dataset_info["created"].isoformat()
-            if dataset_info["modified"]:
-                dataset_info["modified"] = dataset_info["modified"].isoformat()
-            
-            try:
-                # Get all tables/views in dataset
-                tables = list(client.list_tables(dataset_id))
-                
-                for table in tables:
-                    table_id = table.table_id
-                    table_type = table.table_type
-                    
-                    # Skip views if not requested
-                    if table_type == "VIEW" and not include_views:
-                        continue
-                    
-                    print(f"    📋 Analyzing {table_type.lower()}: {table_id}")
-                    
-                    table_info = {
-                        "table_id": table_id,
-                        "table_type": table_type,
-                        "created": getattr(table, 'created', None),
-                        "modified": getattr(table, 'modified', None),
-                        "row_count": 0,
-                        "size_bytes": 0,
-                        "num_bytes": 0,
-                        "num_long_term_bytes": 0
-                    }
-                    
-                    # Convert datetime objects to ISO format if they exist
-                    if table_info["created"]:
-                        table_info["created"] = table_info["created"].isoformat()
-                    if table_info["modified"]:
-                        table_info["modified"] = table_info["modified"].isoformat()
-                    
-                    try:
-                        # Get detailed table information
-                        table_ref = f"{project_id}.{dataset_id}.{table_id}"
-                        table_obj = client.get_table(table_ref)
-                        
-                        # Get row count from metadata
-                        table_info["row_count"] = getattr(table_obj, 'num_rows', 0) if getattr(table_obj, 'num_rows', None) else 0
-                        table_info["size_bytes"] = getattr(table_obj, 'num_bytes', 0) if getattr(table_obj, 'num_bytes', None) else 0
-                        table_info["num_bytes"] = getattr(table_obj, 'num_bytes', 0) if getattr(table_obj, 'num_bytes', None) else 0
-                        table_info["num_long_term_bytes"] = getattr(table_obj, 'num_long_term_bytes', 0) if getattr(table_obj, 'num_long_term_bytes', None) else 0
-                        
-                        # Update dataset summary
-                        if table_type == "TABLE":
-                            dataset_info["summary"]["total_tables"] += 1
-                            hierarchy["summary"]["total_tables"] += 1
-                        elif table_type == "VIEW":
-                            dataset_info["summary"]["total_views"] += 1
-                            hierarchy["summary"]["total_views"] += 1
-                        
-                        dataset_info["summary"]["total_rows"] += table_info["row_count"]
-                        hierarchy["summary"]["total_rows"] += table_info["row_count"]
-                        
-                        print(f"      ✅ {table_type}: {table_id} - {table_info['row_count']:,} rows")
-                        
-                    except Exception as e:
-                        print(f"      ⚠️  Error analyzing {table_type} {table_id}: {e}")
-                        table_info["error"] = str(e)
-                    
-                    dataset_info["tables"][table_id] = table_info
-                
-                print(f"  ✅ Dataset {dataset_id}: {dataset_info['summary']['total_tables']} tables, {dataset_info['summary']['total_views']} views, {dataset_info['summary']['total_rows']:,} rows")
-                
-            except Exception as e:
-                print(f"  ❌ Error analyzing dataset {dataset_id}: {e}")
-                dataset_info["error"] = str(e)
-            
-            hierarchy["datasets"][dataset_id] = dataset_info
+            # Collect results as they complete
+            for future in as_completed(future_to_dataset):
+                try:
+                    dataset_id, dataset_info = future.result()
+                    if dataset_id and dataset_info:
+                        hierarchy["datasets"][dataset_id] = dataset_info
+                except Exception as e:
+                    dataset_item = future_to_dataset[future]
+                    print(f"  ❌ Error processing dataset {dataset_item.dataset_id}: {e}")
         
         print(f"🎯 Analysis complete: {hierarchy['summary']['total_datasets']} datasets, {hierarchy['summary']['total_tables']} tables, {hierarchy['summary']['total_views']} views, {hierarchy['summary']['total_rows']:,} total rows")
         
