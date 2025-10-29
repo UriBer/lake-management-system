@@ -232,6 +232,55 @@ The tool automatically optimizes BigQuery writes based on data size:
 ./lc dataset-hierarchy --project my-project-id --bq-table dataset.hierarchy_analysis --format both --compare-latest
 ```
 
+### 6. BigQuery Alerts (`bq-alerts`)
+
+Detect significant table size changes by comparing day-over-day data from the batch_management table. Alerts are written to BigQuery and can be monitored via GCP Cloud Monitoring.
+
+```bash
+# Basic alert detection
+./lc bq-alerts --project my-project-id --batch-mgmt-table dataset.batch_management
+
+# Custom alerts table
+./lc bq-alerts --project my-project-id --batch-mgmt-table dataset.batch_management --alerts-table dataset.custom_alerts
+
+# Using environment variables
+# Set BATCH_MGMT_TABLE and ALERTS_TABLE in .env, then:
+./lc bq-alerts --project my-project-id
+```
+
+**Features:**
+- Day-over-day comparison of batch_management data
+- Configurable alert thresholds (percentage and absolute)
+- Severity levels: CRITICAL, HIGH, MEDIUM, LOW
+- Multiple metrics: total_bytes, num_tables, num_datasets, total_rows
+- BigQuery alerts table with partitioning and clustering
+- Integration with GCP Cloud Monitoring (see `alerts/` directory)
+
+**Alert Thresholds:**
+- Default: >20% increase OR >10 GB increase
+- Customizable via environment variables (see `.env.example`)
+- Severity based on thresholds:
+  - **CRITICAL**: >100% OR >50 GB
+  - **HIGH**: >50% OR >20 GB
+  - **MEDIUM**: >20% OR >10 GB
+  - **LOW**: <20% AND <10 GB
+
+**Workflow:**
+1. Run `dataset-hierarchy` daily to populate `batch_management` table
+2. Run `bq-alerts` to detect changes and write alerts
+3. Configure Cloud Monitoring policies (see `alerts/README.md`)
+4. Receive notifications via email, Slack, or other channels
+
+**Examples:**
+```bash
+# Complete daily workflow
+./lc dataset-hierarchy --project my-project-id --batch-mgmt-table dataset.batch_management --bq-table dataset.hierarchy_analysis
+./lc bq-alerts --project my-project-id --batch-mgmt-table dataset.batch_management
+
+# Query alerts
+# SELECT * FROM `governance_metadata.size_alerts` WHERE status='PENDING' ORDER BY alert_timestamp DESC;
+```
+
 **Examples:**
 ```bash
 # Update metadata with logging
@@ -286,7 +335,8 @@ app-cli/
 │   ├── schema_compare.py         # Schema comparison module
 │   ├── table_compare.py          # Table comparison module
 │   ├── update_metadata.py        # Metadata update module
-│   └── dataset_hierarchy.py      # Dataset hierarchy analysis module
+│   ├── dataset_hierarchy.py      # Dataset hierarchy analysis module
+│   └── bq_alerts.py              # BigQuery alerts detection module
 ├── requirements.txt              # Unified dependencies
 ├── .env.example                  # Environment template
 ├── install.sh                    # Installation script

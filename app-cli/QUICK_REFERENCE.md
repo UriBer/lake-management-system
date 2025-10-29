@@ -35,6 +35,11 @@ gcloud auth application-default login
 ./lc dataset-hierarchy --project <project> [--include-views] [--compare <file>] [--output <file>] [--format json|tree|both] [--max-tables N] [--bq-table <table>] [--batch-mgmt-table <table>] [--batch-id <id>] [--compare-latest] [--compare-batch-id <id>] [--compare-date <YYYY-MM-DD>]
 ```
 
+### BigQuery Alerts
+```bash
+./lc bq-alerts --project <project> [--batch-mgmt-table <table>] [--alerts-table <table>]
+```
+
 ## 🔧 Configuration (.env)
 ```bash
 PROJECT_ID=your-project-id
@@ -42,6 +47,8 @@ METADATA_TABLE=governance_metadata.project_metadata
 JOB_RUN_TABLE=governance_metadata.job_runs
 SLEEP_MSECONDS=500
 MAX_PARALLEL_WORKERS=10
+BATCH_MGMT_TABLE=governance_metadata.batch_management
+ALERTS_TABLE=governance_metadata.size_alerts
 ```
 
 ## 📊 Examples
@@ -72,6 +79,13 @@ MAX_PARALLEL_WORKERS=10
 
 # Combined: batch management + BigQuery persistence
 ./lc dataset-hierarchy --project my-project-id --batch-mgmt-table dataset.batch_management --bq-table dataset.hierarchy_analysis
+
+# Detect alerts (after running dataset-hierarchy)
+./lc bq-alerts --project my-project-id --batch-mgmt-table dataset.batch_management
+
+# Complete daily workflow
+./lc dataset-hierarchy --project my-project-id --batch-mgmt-table dataset.batch_management --bq-table dataset.hierarchy_analysis
+./lc bq-alerts --project my-project-id --batch-mgmt-table dataset.batch_management
 ```
 
 ## 🆘 Help

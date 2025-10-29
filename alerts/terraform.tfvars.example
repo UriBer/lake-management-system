@@ -1,0 +1,29 @@
+# Terraform Variables for BigQuery Alerts - Cloud Monitoring
+# Copy this file to terraform.tfvars and customize
+
+project_id = "your-project-id"
+region     = "us-central1"
+
+# BigQuery Tables
+batch_management_table = "governance_metadata.batch_management"
+alerts_table          = "governance_metadata.size_alerts"
+
+# Email notification recipients
+alert_email_recipients = [
+  "team-lead@example.com",
+  "data-eng@example.com",
+]
+
+# Alert Thresholds (Percentage)
+critical_size_increase_percent = 100.0  # >100% = CRITICAL
+high_size_increase_percent     = 50.0   # >50% = HIGH
+medium_size_increase_percent   = 20.0   # >20% = MEDIUM
+
+# Alert Thresholds (Absolute GB)
+critical_size_increase_gb = 50.0  # >50GB = CRITICAL
+high_size_increase_gb     = 20.0  # >20GB = HIGH
+medium_size_increase_gb   = 10.0  # >10GB = MEDIUM
+
+# Alert Auto-close (seconds, 0 to disable)
+alert_auto_close_seconds = 1800  # 30 minutes
+
