@@ -208,6 +208,10 @@ Analyze complete dataset hierarchy with change tracking. Supports JSON output an
 ```
 
 **BigQuery Persistence:**
+The tool automatically optimizes BigQuery writes based on data size:
+- **Small hierarchies (<5MB)**: Uses fast streaming inserts
+- **Large hierarchies (>5MB)**: Uses reliable batch load jobs
+
 ```bash
 # Save to BigQuery table (auto batch_id)
 ./lc dataset-hierarchy --project my-project-id --bq-table dataset.hierarchy_analysis
@@ -345,6 +349,14 @@ MAX_PARALLEL_WORKERS=20  # Increase for faster analysis (default: 10)
 ```
 
 **Note:** Higher worker counts improve speed but increase BigQuery API usage. Monitor your quota limits.
+
+**BigQuery Write Optimization:**
+The tool automatically optimizes BigQuery writes based on data size:
+- **Streaming Inserts**: Used for small hierarchies (<5MB) - faster, lower latency
+- **Batch Load Jobs**: Used for large hierarchies (>5MB) - more reliable, handles large payloads
+- **Automatic Detection**: No configuration needed - the tool automatically chooses the best method
+
+This ensures optimal performance for both small and large projects while respecting BigQuery API limits.
 
 ## 🧪 Testing
 

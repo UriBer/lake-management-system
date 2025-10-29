@@ -335,7 +335,8 @@ def ensure_bq_table(client: bigquery.Client, table_ref: str) -> str:
 
 def save_to_bigquery(client: bigquery.Client, hierarchy: Dict[str, Any], batch_id: str, bq_table: str, project_id: str) -> None:
     """
-    Save hierarchy analysis to BigQuery table.
+    Save hierarchy analysis to BigQuery table with automatic optimization.
+    Uses load jobs for large data (>5MB) and streaming inserts for small data.
     
     Args:
         client: BigQuery client
@@ -355,26 +356,87 @@ def save_to_bigquery(client: bigquery.Client, hierarchy: Dict[str, Any], batch_i
         hierarchy_json = json.dumps(hierarchy, ensure_ascii=False)
         summary_json = json.dumps(hierarchy.get("summary", {}), ensure_ascii=False)
         
-        # Format timestamp in BigQuery TIMESTAMP format (YYYY-MM-DD HH:MM:SS.ffffff)
-        ldts_str = ldts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]  # Remove last 3 microsecond digits for millisecond precision
+        # Check JSON size to determine insertion method
+        hierarchy_size = len(hierarchy_json.encode('utf-8'))
+        summary_size = len(summary_json.encode('utf-8'))
+        total_size = hierarchy_size + summary_size
         
-        rows_to_insert = [{
-            "ldts": ldts_str,
-            "batch_id": batch_id,
-            "project_id": hierarchy.get("project_id", ""),
-            "hierarchy_json": hierarchy_json,
-            "summary_json": summary_json,
-        }]
+        # Threshold: 5MB (BigQuery streaming insert limit is ~10MB per request, but we use 5MB as safe threshold)
+        SIZE_THRESHOLD = 5 * 1024 * 1024  # 5MB in bytes
         
-        errors = client.insert_rows_json(full_table_ref, rows_to_insert)
-        if errors:
-            print(f"❌ Error inserting rows: {errors}")
-            return
-        
-        print(f"✅ Saved to BigQuery: {full_table_ref} (batch_id: {batch_id}, ldts: {ldts.isoformat()})")
+        if total_size > SIZE_THRESHOLD:
+            # Use load job for large data (more reliable, handles large payloads)
+            print(f"📦 Large hierarchy detected ({total_size / (1024*1024):.2f} MB), using batch load job...")
+            
+            from google.cloud.bigquery import LoadJobConfig, SourceFormat
+            import io
+            
+            # Prepare data for load job (newline-delimited JSON)
+            row_data = {
+                "ldts": ldts.isoformat(),
+                "batch_id": batch_id,
+                "project_id": hierarchy.get("project_id", ""),
+                "hierarchy_json": hierarchy_json,
+                "summary_json": summary_json,
+            }
+            
+            job_config = LoadJobConfig(
+                source_format=SourceFormat.NEWLINE_DELIMITED_JSON,
+                write_disposition="WRITE_APPEND",
+                schema=[
+                    bigquery.SchemaField("ldts", "TIMESTAMP", mode="REQUIRED"),
+                    bigquery.SchemaField("batch_id", "STRING", mode="REQUIRED"),
+                    bigquery.SchemaField("project_id", "STRING", mode="REQUIRED"),
+                    bigquery.SchemaField("hierarchy_json", "STRING", mode="REQUIRED"),
+                    bigquery.SchemaField("summary_json", "STRING", mode="REQUIRED"),
+                ],
+                ignore_unknown_values=False,
+            )
+            
+            # Write as newline-delimited JSON
+            json_str = json.dumps(row_data, ensure_ascii=False) + "\n"
+            
+            job = client.load_table_from_file(
+                io.StringIO(json_str),
+                full_table_ref,
+                job_config=job_config
+            )
+            
+            # Wait for job to complete
+            job.result()
+            
+            if job.errors:
+                print(f"❌ Error in load job: {job.errors}")
+                return
+            
+            print(f"✅ Saved to BigQuery via load job: {full_table_ref} (batch_id: {batch_id}, size: {total_size / (1024*1024):.2f} MB)")
+            
+        else:
+            # Use streaming insert for small data (faster, lower latency)
+            print(f"⚡ Small hierarchy ({total_size / (1024*1024):.2f} MB), using streaming insert...")
+            
+            # Format timestamp in BigQuery TIMESTAMP format (YYYY-MM-DD HH:MM:SS.ffffff)
+            ldts_str = ldts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            
+            rows_to_insert = [{
+                "ldts": ldts_str,
+                "batch_id": batch_id,
+                "project_id": hierarchy.get("project_id", ""),
+                "hierarchy_json": hierarchy_json,
+                "summary_json": summary_json,
+            }]
+            
+            errors = client.insert_rows_json(full_table_ref, rows_to_insert)
+            if errors:
+                print(f"❌ Error inserting rows: {errors}")
+                return
+            
+            print(f"✅ Saved to BigQuery via streaming insert: {full_table_ref} (batch_id: {batch_id}, ldts: {ldts.isoformat()})")
         
     except Exception as e:
         print(f"❌ Error saving to BigQuery: {e}")
+        import traceback
+        print(f"Details: {traceback.format_exc()}")
 
 def load_from_bigquery(client: bigquery.Client, bq_table: str, project_id: str, 
                        batch_id: Optional[str] = None, 
