@@ -160,20 +160,26 @@ Update column descriptions from metadata table.
 - Change detection (only updates when descriptions differ)
 
 ### 5. Dataset Hierarchy (`dataset-hierarchy`)
-Analyze complete dataset hierarchy with change tracking.
+Analyze complete dataset hierarchy with change tracking. Supports JSON output and a human-friendly tree view.
 
 ```bash
-# Basic analysis
-./lc dataset-hierarchy --project my-project-id
+# Basic analysis (JSON output)
+./lc dataset-hierarchy --project my-project-id --format json
 
 # Include views in analysis
 ./lc dataset-hierarchy --project my-project-id --include-views
 
-# Compare with previous analysis
-./lc dataset-hierarchy --project my-project-id --compare previous_analysis.json
+# Human tree view (no file needed)
+./lc dataset-hierarchy --project my-project-id --format tree
 
-# Custom output file
-./lc dataset-hierarchy --project my-project-id --output my_analysis.json
+# Limit number of tables shown per dataset in tree
+./lc dataset-hierarchy --project my-project-id --format tree --max-tables 20
+
+# Compare with previous analysis (JSON)
+./lc dataset-hierarchy --project my-project-id --compare previous_analysis.json --format both
+
+# Custom JSON output file
+./lc dataset-hierarchy --project my-project-id --format json --output my_analysis.json
 ```
 
 **Features:**
@@ -183,6 +189,43 @@ Analyze complete dataset hierarchy with change tracking.
 - Change detection between runs
 - Comprehensive JSON output for comparison
 - Detailed change summary with additions, removals, and modifications
+- **BigQuery table persistence** with LDTS and batch_id tracking
+- **Automatic comparison** with previous runs from BigQuery
+- **Batch Management Table** with automatic batch_id generation (DDMMYYYY-NNNN format)
+- **Data size tracking** (total bytes/GB)
+
+**Batch Management:**
+```bash
+# Use batch management table (auto-generates DDMMYYYY-NNNN batch_id like 29102025-0001)
+./lc dataset-hierarchy --project my-project-id --batch-mgmt-table dataset.batch_management
+
+# Combine with BigQuery persistence
+./lc dataset-hierarchy --project my-project-id --batch-mgmt-table dataset.batch_management --bq-table dataset.hierarchy_analysis
+
+# Custom batch_id (overrides auto-generation)
+./lc dataset-hierarchy --project my-project-id --batch-mgmt-table dataset.batch_management --batch-id 29102025-0050
+```
+
+**BigQuery Persistence:**
+```bash
+# Save to BigQuery table (auto batch_id)
+./lc dataset-hierarchy --project my-project-id --bq-table dataset.hierarchy_analysis
+
+# Save with custom batch_id
+./lc dataset-hierarchy --project my-project-id --bq-table dataset.hierarchy_analysis --batch-id my_batch_001
+
+# Compare with latest run from BigQuery (automatic when --bq-table is used)
+./lc dataset-hierarchy --project my-project-id --bq-table dataset.hierarchy_analysis --compare-latest
+
+# Compare with specific batch_id
+./lc dataset-hierarchy --project my-project-id --bq-table dataset.hierarchy_analysis --compare-batch-id batch_20241027_120000
+
+# Compare with specific date
+./lc dataset-hierarchy --project my-project-id --bq-table dataset.hierarchy_analysis --compare-date 2024-10-27
+
+# Combine BigQuery with tree view
+./lc dataset-hierarchy --project my-project-id --bq-table dataset.hierarchy_analysis --format both --compare-latest
+```
 
 **Examples:**
 ```bash
@@ -208,6 +251,7 @@ JOB_RUN_TABLE=governance_metadata.job_runs     # Job logging table path
 # Optional
 SLEEP_MSECONDS=500                            # Rate limiting delay
 MAX_PARALLEL_WORKERS=10                       # Parallel processing limit
+BATCH_MGMT_TABLE=governance_metadata.batch_management  # Batch management table (for dataset-hierarchy)
 ```
 
 ### Sample Setup

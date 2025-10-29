@@ -8,11 +8,13 @@ Analyzes all datasets in a BigQuery project, providing:
 - Row counts per table (from metadata)
 - Change detection between runs
 - Comprehensive logging for comparison
+- BigQuery table persistence with LDTS and batch_id
 """
 
 import os
 import sys
 import json
+import uuid
 import argparse
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
@@ -170,6 +172,48 @@ def analyze_dataset_hierarchy(client: bigquery.Client, project_id: str, include_
     
     return hierarchy
 
+def _bytes_to_human(num_bytes: int) -> str:
+    """Convert bytes to human-readable format."""
+    units = ["B", "KB", "MB", "GB", "TB"]
+    size = float(num_bytes)
+    idx = 0
+    while size >= 1024 and idx < len(units) - 1:
+        size /= 1024
+        idx += 1
+    if idx == 0:
+        return f"{int(size)} {units[idx]}"
+    return f"{size:.2f} {units[idx]}"
+
+def print_hierarchy_tree(hierarchy: Dict[str, Any], max_tables_per_dataset: Optional[int] = None) -> None:
+    """Pretty-print the hierarchy in a tree format for human review."""
+    print("\n" + "="*80)
+    print("📚 DATASET HIERARCHY (TREE VIEW)")
+    print("="*80)
+    summary = hierarchy.get("summary", {})
+    print(f"Project: {hierarchy.get('project_id')}")
+    print(f"Datasets: {summary.get('total_datasets', 0)} | Tables: {summary.get('total_tables', 0)} | Views: {summary.get('total_views', 0)} | Rows: {summary.get('total_rows', 0):,}")
+    print()
+    
+    datasets = hierarchy.get("datasets", {})
+    for dataset_id in sorted(datasets.keys()):
+        ds = datasets[dataset_id]
+        ds_sum = ds.get("summary", {})
+        print(f"📁 {dataset_id}  (tables: {ds_sum.get('total_tables', 0)}, views: {ds_sum.get('total_views', 0)}, rows: {ds_sum.get('total_rows', 0):,})")
+        tables = ds.get("tables", {})
+        shown = 0
+        for table_id in sorted(tables.keys()):
+            if max_tables_per_dataset is not None and shown >= max_tables_per_dataset:
+                remaining = max(0, len(tables) - shown)
+                if remaining > 0:
+                    print(f"   └─ … {remaining} more")
+                break
+            t = tables[table_id]
+            icon = "🗂️ " if t.get("table_type") == "TABLE" else "🔎 "
+            rows = t.get("row_count", 0)
+            size_h = _bytes_to_human(int(t.get("size_bytes", 0) or 0))
+            print(f"   └─ {icon}{table_id}  (rows: {rows:,}, size: {size_h})")
+            shown += 1
+
 def save_analysis_to_file(hierarchy: Dict[str, Any], output_file: str) -> None:
     """Save analysis results to JSON file."""
     try:
@@ -179,8 +223,165 @@ def save_analysis_to_file(hierarchy: Dict[str, Any], output_file: str) -> None:
     except Exception as e:
         print(f"❌ Error saving analysis: {e}")
 
-def load_previous_analysis(previous_file: str) -> Optional[Dict[str, Any]]:
-    """Load previous analysis for comparison."""
+def ensure_bq_table(client: bigquery.Client, table_ref: str) -> str:
+    """Ensure the BigQuery table exists with correct schema. Returns full table reference."""
+    try:
+        client.get_table(table_ref)
+        print(f"✅ BigQuery table exists: {table_ref}")
+        return table_ref
+    except NotFound:
+        print(f"📝 Creating BigQuery table: {table_ref}")
+        schema = [
+            bigquery.SchemaField("ldts", "TIMESTAMP", mode="REQUIRED", description="Load timestamp"),
+            bigquery.SchemaField("batch_id", "STRING", mode="REQUIRED", description="Batch identifier"),
+            bigquery.SchemaField("project_id", "STRING", mode="REQUIRED", description="BigQuery project ID"),
+            bigquery.SchemaField("hierarchy_json", "STRING", mode="REQUIRED", description="Complete hierarchy JSON"),
+            bigquery.SchemaField("summary_json", "STRING", mode="REQUIRED", description="Summary statistics JSON"),
+        ]
+        
+        table = bigquery.Table(table_ref, schema=schema)
+        table.description = "Dataset hierarchy analysis results with LDTS and batch tracking"
+        client.create_table(table)
+        print(f"✅ Created BigQuery table: {table_ref}")
+        return table_ref
+
+def save_to_bigquery(client: bigquery.Client, hierarchy: Dict[str, Any], batch_id: str, bq_table: str, project_id: str) -> None:
+    """
+    Save hierarchy analysis to BigQuery table.
+    
+    Args:
+        client: BigQuery client
+        hierarchy: Hierarchy analysis dictionary
+        batch_id: Batch identifier
+        bq_table: BigQuery table reference (format: project.dataset.table or dataset.table)
+        project_id: Project ID for fallback
+    """
+    try:
+        # Handle table reference
+        if '.' not in bq_table or len(bq_table.split('.')) == 2:
+            bq_table = f"{project_id}.{bq_table}"
+        
+        full_table_ref = ensure_bq_table(client, bq_table)
+        
+        ldts = datetime.now(timezone.utc)
+        hierarchy_json = json.dumps(hierarchy, ensure_ascii=False)
+        summary_json = json.dumps(hierarchy.get("summary", {}), ensure_ascii=False)
+        
+        # Format timestamp in BigQuery TIMESTAMP format (YYYY-MM-DD HH:MM:SS.ffffff)
+        ldts_str = ldts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]  # Remove last 3 microsecond digits for millisecond precision
+        
+        rows_to_insert = [{
+            "ldts": ldts_str,
+            "batch_id": batch_id,
+            "project_id": hierarchy.get("project_id", ""),
+            "hierarchy_json": hierarchy_json,
+            "summary_json": summary_json,
+        }]
+        
+        errors = client.insert_rows_json(full_table_ref, rows_to_insert)
+        if errors:
+            print(f"❌ Error inserting rows: {errors}")
+            return
+        
+        print(f"✅ Saved to BigQuery: {full_table_ref} (batch_id: {batch_id}, ldts: {ldts.isoformat()})")
+        
+    except Exception as e:
+        print(f"❌ Error saving to BigQuery: {e}")
+
+def load_from_bigquery(client: bigquery.Client, bq_table: str, project_id: str, 
+                       batch_id: Optional[str] = None, 
+                       run_date: Optional[str] = None,
+                       use_latest: bool = True) -> Optional[Dict[str, Any]]:
+    """
+    Load previous hierarchy analysis from BigQuery.
+    
+    Args:
+        client: BigQuery client
+        bq_table: BigQuery table reference (format: project.dataset.table or dataset.table)
+        project_id: Project ID to filter by
+        batch_id: Specific batch_id to load (optional)
+        run_date: Specific date to load (YYYY-MM-DD format, optional)
+        use_latest: If True and no batch_id/date specified, load latest by LDTS
+    
+    Returns:
+        Previous hierarchy dictionary or None if not found
+    """
+    try:
+        # Handle table reference
+        if '.' not in bq_table or len(bq_table.split('.')) == 2:
+            bq_table = f"{project_id}.{bq_table}"
+        # Build query based on parameters
+        if batch_id:
+            query = f"""
+            SELECT hierarchy_json, ldts, batch_id
+            FROM `{bq_table}`
+            WHERE project_id = @project_id
+              AND batch_id = @batch_id
+            ORDER BY ldts DESC
+            LIMIT 1
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("project_id", "STRING", project_id),
+                    bigquery.ScalarQueryParameter("batch_id", "STRING", batch_id),
+                ]
+            )
+        elif run_date:
+            query = f"""
+            SELECT hierarchy_json, ldts, batch_id
+            FROM `{bq_table}`
+            WHERE project_id = @project_id
+              AND DATE(ldts) = @run_date
+            ORDER BY ldts DESC
+            LIMIT 1
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("project_id", "STRING", project_id),
+                    bigquery.ScalarQueryParameter("run_date", "DATE", run_date),
+                ]
+            )
+        elif use_latest:
+            query = f"""
+            SELECT hierarchy_json, ldts, batch_id
+            FROM `{bq_table}`
+            WHERE project_id = @project_id
+            ORDER BY ldts DESC
+            LIMIT 1
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("project_id", "STRING", project_id),
+                ]
+            )
+        else:
+            print("❌ No comparison criteria specified")
+            return None
+        
+        print(f"🔍 Querying BigQuery for previous analysis...")
+        query_job = client.query(query, job_config=job_config)
+        results = list(query_job.result())
+        
+        if not results:
+            print(f"📝 No previous analysis found in BigQuery table")
+            return None
+        
+        row = results[0]
+        hierarchy_json_str = row.hierarchy_json
+        hierarchy = json.loads(hierarchy_json_str)
+        
+        print(f"📖 Loaded previous analysis from BigQuery (batch_id: {row.batch_id}, ldts: {row.ldts})")
+        return hierarchy
+        
+    except Exception as e:
+        print(f"⚠️  Error loading from BigQuery: {e}")
+        return None
+
+def load_previous_analysis(previous_file: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Load previous analysis for comparison (from file)."""
+    if not previous_file:
+        return None
+        
     try:
         if not os.path.exists(previous_file):
             print(f"📝 No previous analysis found at: {previous_file}")
@@ -285,6 +486,155 @@ def compare_analyses(current: Dict[str, Any], previous: Optional[Dict[str, Any]]
     
     return comparison
 
+def get_batch_management_table(client: bigquery.Client, mgmt_table: str, project_id: str) -> str:
+    """Get or create batch management table. Returns full table reference."""
+    # Handle table reference
+    if '.' not in mgmt_table or len(mgmt_table.split('.')) == 2:
+        mgmt_table = f"{project_id}.{mgmt_table}"
+    
+    try:
+        client.get_table(mgmt_table)
+        print(f"✅ Batch management table exists: {mgmt_table}")
+        return mgmt_table
+    except NotFound:
+        print(f"📝 Creating batch management table: {mgmt_table}")
+        schema = [
+            bigquery.SchemaField("project_id", "STRING", mode="REQUIRED", description="BigQuery project ID"),
+            bigquery.SchemaField("batch_id", "STRING", mode="REQUIRED", description="Batch identifier (DDMMYYYY-NNNN format)"),
+            bigquery.SchemaField("ldts", "TIMESTAMP", mode="REQUIRED", description="Load timestamp"),
+            bigquery.SchemaField("num_datasets", "INTEGER", mode="REQUIRED", description="Number of datasets"),
+            bigquery.SchemaField("num_tables", "INTEGER", mode="REQUIRED", description="Number of tables"),
+            bigquery.SchemaField("num_views", "INTEGER", mode="REQUIRED", description="Number of views"),
+            bigquery.SchemaField("total_rows", "INTEGER", mode="REQUIRED", description="Total number of rows across all tables"),
+            bigquery.SchemaField("total_bytes", "INTEGER", mode="REQUIRED", description="Total data size in bytes"),
+        ]
+        
+        table = bigquery.Table(mgmt_table, schema=schema)
+        table.description = "Batch management table for dataset hierarchy analysis tracking"
+        client.create_table(table)
+        print(f"✅ Created batch management table: {mgmt_table}")
+        return mgmt_table
+
+def get_next_batch_id(client: bigquery.Client, mgmt_table: str, project_id: str) -> str:
+    """
+    Generate next batch_id in format DDMMYYYY-NNNN.
+    
+    Args:
+        client: BigQuery client
+        mgmt_table: Batch management table reference
+        project_id: Project ID
+    
+    Returns:
+        Next batch_id string (e.g., "29102025-0001")
+    """
+    # Ensure table exists first
+    full_table_ref = get_batch_management_table(client, mgmt_table, project_id)
+    
+    # Get today's date in DDMMYYYY format
+    today = datetime.now(timezone.utc)
+    date_str = today.strftime("%d%m%Y")
+    
+    # Query for the latest batch_id for today for this project
+    query = f"""
+    SELECT batch_id
+    FROM `{full_table_ref}`
+    WHERE project_id = @project_id
+      AND batch_id LIKE @date_pattern
+    ORDER BY batch_id DESC
+    LIMIT 1
+    """
+    
+    try:
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("project_id", "STRING", project_id),
+                bigquery.ScalarQueryParameter("date_pattern", "STRING", f"{date_str}-%"),
+            ]
+        )
+        
+        query_job = client.query(query, job_config=job_config)
+        results = list(query_job.result())
+        
+        if results:
+            # Extract the counter from the last batch_id
+            last_batch_id = results[0].batch_id
+            # Format: DDMMYYYY-NNNN
+            if '-' in last_batch_id:
+                counter_str = last_batch_id.split('-')[1]
+                counter = int(counter_str) + 1
+            else:
+                counter = 1
+        else:
+            # First batch of the day
+            counter = 1
+        
+        # Format counter with zero padding (4 digits)
+        batch_id = f"{date_str}-{counter:04d}"
+        return batch_id
+        
+    except Exception as e:
+        print(f"⚠️  Error querying batch management table: {e}")
+        # Fallback to timestamp-based batch_id
+        return f"{date_str}-0001"
+
+def calculate_total_bytes(hierarchy: Dict[str, Any]) -> int:
+    """Calculate total data size in bytes across all tables."""
+    total_bytes = 0
+    for dataset_id, dataset_info in hierarchy.get("datasets", {}).items():
+        for table_id, table_info in dataset_info.get("tables", {}).items():
+            # Use num_bytes or size_bytes, whichever is available
+            table_bytes = table_info.get("num_bytes", 0) or table_info.get("size_bytes", 0)
+            total_bytes += int(table_bytes) if table_bytes else 0
+    return total_bytes
+
+def save_to_batch_management(client: bigquery.Client, hierarchy: Dict[str, Any], batch_id: str, 
+                              mgmt_table: str, project_id: str) -> None:
+    """
+    Save summary to batch management table.
+    
+    Args:
+        client: BigQuery client
+        hierarchy: Hierarchy analysis dictionary
+        batch_id: Batch identifier
+        mgmt_table: Batch management table reference
+        project_id: Project ID
+    """
+    try:
+        full_table_ref = get_batch_management_table(client, mgmt_table, project_id)
+        
+        ldts = datetime.now(timezone.utc)
+        summary = hierarchy.get("summary", {})
+        total_bytes = calculate_total_bytes(hierarchy)
+        
+        # Format timestamp in BigQuery TIMESTAMP format
+        ldts_str = ldts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        
+        rows_to_insert = [{
+            "project_id": project_id,
+            "batch_id": batch_id,
+            "ldts": ldts_str,
+            "num_datasets": summary.get("total_datasets", 0),
+            "num_tables": summary.get("total_tables", 0),
+            "num_views": summary.get("total_views", 0),
+            "total_rows": summary.get("total_rows", 0),
+            "total_bytes": total_bytes,
+        }]
+        
+        errors = client.insert_rows_json(full_table_ref, rows_to_insert)
+        if errors:
+            print(f"❌ Error inserting into batch management table: {errors}")
+            return
+        
+        # Format total_bytes for display
+        total_gb = total_bytes / (1024 ** 3)
+        print(f"✅ Saved to batch management: {full_table_ref}")
+        print(f"   Batch ID: {batch_id} | Datasets: {summary.get('total_datasets', 0)} | "
+              f"Tables: {summary.get('total_tables', 0)} | Rows: {summary.get('total_rows', 0):,} | "
+              f"Size: {total_gb:.2f} GB")
+        
+    except Exception as e:
+        print(f"❌ Error saving to batch management table: {e}")
+
 def print_comparison_summary(comparison: Dict[str, Any]) -> None:
     """Print a summary of changes."""
     print("\n" + "="*80)
@@ -356,33 +706,83 @@ def main(args):
         print(f"❌ Error connecting to BigQuery: {e}")
         return 1
     
+    # Get batch management table from args or env
+    mgmt_table = getattr(args, 'batch_mgmt_table', None) or os.getenv("BATCH_MGMT_TABLE")
+    
+    # Generate batch_id if not provided
+    if getattr(args, 'batch_id', None):
+        batch_id = args.batch_id
+    elif mgmt_table:
+        # Use batch management table to generate auto-incrementing batch_id
+        batch_id = get_next_batch_id(client, mgmt_table, project_id)
+        print(f"📦 Generated batch_id: {batch_id}")
+    else:
+        # Fallback to timestamp-based batch_id
+        batch_id = f"batch_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    
+    # Analyze dataset hierarchy
+    hierarchy = analyze_dataset_hierarchy(client, project_id, args.include_views)
+    
+    # Save to batch management table if configured
+    if mgmt_table:
+        save_to_batch_management(client, hierarchy, batch_id, mgmt_table, project_id)
+    
+    # Save to BigQuery if requested
+    bq_table = getattr(args, 'bq_table', None)
+    if bq_table:
+        save_to_bigquery(client, hierarchy, batch_id, bq_table, project_id)
+    
     # Generate output filename with timestamp
+    output_format = getattr(args, "format", "json")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = f"dataset_hierarchy_{project_id}_{timestamp}.json"
     
     if args.output:
         output_file = args.output
     
-    # Analyze dataset hierarchy
-    hierarchy = analyze_dataset_hierarchy(client, project_id, args.include_views)
+    # Output selection
+    if output_format in ("json", "both"):
+        save_analysis_to_file(hierarchy, output_file)
+    if output_format in ("tree", "both"):
+        print_hierarchy_tree(hierarchy, getattr(args, "max_tables", None))
     
-    # Save analysis
-    save_analysis_to_file(hierarchy, output_file)
+    # Handle comparison
+    previous_analysis = None
     
-    # Compare with previous analysis if requested
-    if args.compare:
-        previous_file = args.compare
-        previous_analysis = load_previous_analysis(previous_file)
+    # Priority: 1. BigQuery (if enabled), 2. File, 3. None
+    if bq_table:
+        # Load from BigQuery
+        compare_batch_id = getattr(args, 'compare_batch_id', None)
+        compare_date = getattr(args, 'compare_date', None)
+        # Default to latest if no specific batch_id or date is provided
+        use_latest = getattr(args, 'compare_latest', False) or (not compare_batch_id and not compare_date)
+        
+        previous_analysis = load_from_bigquery(
+            client, 
+            bq_table, 
+            project_id,
+            batch_id=compare_batch_id,
+            run_date=compare_date,
+            use_latest=use_latest
+        )
+    
+    # Fallback to file if BigQuery didn't return results
+    if not previous_analysis and args.compare:
+        previous_analysis = load_previous_analysis(args.compare)
+    
+    # Perform comparison if we have previous data
+    if previous_analysis or args.compare or bq_table:
         comparison = compare_analyses(hierarchy, previous_analysis)
         
-        # Save comparison
-        comparison_file = output_file.replace('.json', '_comparison.json')
-        try:
-            with open(comparison_file, 'w', encoding='utf-8') as f:
-                json.dump(comparison, f, indent=2, ensure_ascii=False)
-            print(f"💾 Comparison saved to: {comparison_file}")
-        except Exception as e:
-            print(f"❌ Error saving comparison: {e}")
+        # Save comparison if outputting JSON
+        if output_format in ("json", "both"):
+            comparison_file = output_file.replace('.json', '_comparison.json')
+            try:
+                with open(comparison_file, 'w', encoding='utf-8') as f:
+                    json.dump(comparison, f, indent=2, ensure_ascii=False)
+                print(f"💾 Comparison saved to: {comparison_file}")
+            except Exception as e:
+                print(f"❌ Error saving comparison: {e}")
         
         # Print comparison summary
         print_comparison_summary(comparison)
@@ -394,7 +794,10 @@ def main(args):
     print(f"📋 Tables: {hierarchy['summary']['total_tables']}")
     print(f"👁️  Views: {hierarchy['summary']['total_views']}")
     print(f"📊 Total Rows: {hierarchy['summary']['total_rows']:,}")
-    print(f"💾 Output: {output_file}")
+    if bq_table:
+        print(f"💾 BigQuery: {bq_table} (batch_id: {batch_id})")
+    if output_format in ("json", "both"):
+        print(f"💾 Output: {output_file}")
     
     return 0
 
@@ -407,14 +810,26 @@ Examples:
   # Basic analysis
   python dataset_hierarchy.py --project my-project-id
   
-  # Include views in analysis
-  python dataset_hierarchy.py --project my-project-id --include-views
+  # Use batch management table (auto-generates DDMMYYYY-NNNN batch_id)
+  python dataset_hierarchy.py --project my-project-id --batch-mgmt-table dataset.batch_management
   
-  # Compare with previous analysis
-  python dataset_hierarchy.py --project my-project-id --compare previous_analysis.json
+  # Save to BigQuery with auto batch_id from batch management
+  python dataset_hierarchy.py --project my-project-id --bq-table dataset.hierarchy_analysis --batch-mgmt-table dataset.batch_management
   
-  # Custom output file
-  python dataset_hierarchy.py --project my-project-id --output my_analysis.json
+  # Save to BigQuery with custom batch_id
+  python dataset_hierarchy.py --project my-project-id --bq-table dataset.hierarchy_analysis --batch-id 29102025-0001
+  
+  # Compare with latest BigQuery run
+  python dataset_hierarchy.py --project my-project-id --bq-table dataset.hierarchy_analysis --compare-latest
+  
+  # Compare with specific batch_id
+  python dataset_hierarchy.py --project my-project-id --bq-table dataset.hierarchy_analysis --compare-batch-id batch_20241027_120000
+  
+  # Compare with specific date
+  python dataset_hierarchy.py --project my-project-id --bq-table dataset.hierarchy_analysis --compare-date 2024-10-27
+  
+  # Tree view output
+  python dataset_hierarchy.py --project my-project-id --format tree --max-tables 20
         """
     )
     
@@ -439,5 +854,51 @@ Examples:
         help="Output file path (default: auto-generated with timestamp)"
     )
     
+    parser.add_argument(
+        "--format",
+        choices=["json", "tree", "both"],
+        default="json",
+        help="Choose output format: json (default), tree (human-readable), or both"
+    )
+    
+    parser.add_argument(
+        "--max-tables",
+        type=int,
+        help="Limit number of tables shown per dataset in tree view"
+    )
+    
+    parser.add_argument(
+        "--bq-table",
+        help="BigQuery table to save/load hierarchy (format: project.dataset.table or dataset.table)"
+    )
+    
+    parser.add_argument(
+        "--batch-mgmt-table",
+        help="Batch management table for tracking runs (format: project.dataset.table or dataset.table). Enables auto batch_id generation in DDMMYYYY-NNNN format."
+    )
+    
+    parser.add_argument(
+        "--batch-id",
+        help="Custom batch identifier (default: auto-generated via batch management table in DDMMYYYY-NNNN format or timestamp)"
+    )
+    
+    parser.add_argument(
+        "--compare-latest",
+        action="store_true",
+        default=True,
+        help="Compare with latest BigQuery run (default: True when --bq-table is specified)"
+    )
+    
+    parser.add_argument(
+        "--compare-batch-id",
+        help="Compare with specific batch_id from BigQuery table"
+    )
+    
+    parser.add_argument(
+        "--compare-date",
+        help="Compare with specific run date (YYYY-MM-DD format)"
+    )
+    
     args = parser.parse_args()
     sys.exit(main(args))
+

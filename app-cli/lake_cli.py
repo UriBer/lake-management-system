@@ -195,6 +195,50 @@ def setup_dataset_hierarchy_parser(subparsers):
         help="Output file path (default: auto-generated with timestamp)"
     )
     
+    parser.add_argument(
+        "--format",
+        choices=["json", "tree", "both"],
+        default="json",
+        help="Choose output format: json (default), tree (human-readable), or both"
+    )
+    
+    parser.add_argument(
+        "--max-tables",
+        type=int,
+        help="Limit number of tables shown per dataset in tree view"
+    )
+    
+    parser.add_argument(
+        "--bq-table",
+        help="BigQuery table to save/load hierarchy (format: project.dataset.table or dataset.table)"
+    )
+    
+    parser.add_argument(
+        "--batch-mgmt-table",
+        help="Batch management table for tracking runs (format: project.dataset.table or dataset.table). Enables auto batch_id generation."
+    )
+    
+    parser.add_argument(
+        "--batch-id",
+        help="Custom batch identifier (default: auto-generated via batch management table or timestamp)"
+    )
+    
+    parser.add_argument(
+        "--compare-latest",
+        action="store_true",
+        help="Compare with latest BigQuery run (default when --bq-table is specified)"
+    )
+    
+    parser.add_argument(
+        "--compare-batch-id",
+        help="Compare with specific batch_id from BigQuery table"
+    )
+    
+    parser.add_argument(
+        "--compare-date",
+        help="Compare with specific run date (YYYY-MM-DD format)"
+    )
+    
     return parser
 
 def main():
